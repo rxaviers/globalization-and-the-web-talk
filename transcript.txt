@@ -1,0 +1,102 @@
+---
+Authors:
+- Arjun Madgavkar
+- Rafael Xavier de Souza
+---
+
+So what needs to happen to make that a reality? What does a perfect globalization world look like? We have a few opinions on the matter:
+1. The vast majority of front end engineers shouldn’t have to know what i18n is. They should just assume that components are going to work in every language and in every locale.
+2. Web applications should be as light and as fast as possible so that everyone, not just western users with fast internet connections, can benefit from advancements in technology.
+3. Developers and companies should use the native JS API or open source libraries rather than implementing their own enormous solutions, a crime we’ve been guilty of at PayPal.
+
+
+To illustrate the steps we’re taking to get to this world, we want to introduce you to our friend, FooTracker. FooTracker is a prototypical PayPal component as it requires globalization support, but unfortunately it’s built in a way that is in direct conflict with our ideal i18n world. 
+
+
+There’s a few problems we want to highlight:
+1. This component has no globalization formatting built into it. That means that every developer that uses this component has to configure globalization for him or herself. In practice, that means hours of reading through our documentation, getting support questions answered, and implementing logic that should already exist under the hood.
+2. This component is going to be used by a PayPal product that needs to reduce their website from 300KB (gzipped) to 60KB (gzipped). However, our internal i18n library today is bigger than their entire app, therefore we need to pay close attention to reducing the size of our library.
+3. This component can’t directly make use of the native JS API because it is missing certain essential features.
+
+
+So, how do we solve these problems and make FooTracker the ideal component rather than the black sheep component that it is today?
+React + FooTracker
+ Imagine you’re new to PayPal and you decide that you want to create a truly world-ready version of FooTracker called BarTracker. You should be able to give BarTracker to another developer and it should just work for any locale in the entire world. 
+
+
+How would you start this project? The first thing you would probably do is look at the JavaScript API and try to use its formatting features, but it turns out that you can’t because of two reasons: (1) browser support ,this is., the JS API doesnt fully support all browsers PayPal needs to support, on top of that, (2) some of the features that your component needs aren’t included in the native API, for instance name and address formatting, validation..
+
+
+OK, so you can’t use native. What now? You can use an open source library but you realize that i18n libraries aren’t just about code, they are also about the data needed for formatting. Now you’re looking at something that will add tens of kilobytes of code in addition to almost a megabyte of data if we include all the data so it can work in isolation. You quickly realize that this is prohibitively large for client-side applications.
+
+
+Then you have a brilliant idea -- what if you trim down the data size by only including the locale data that is needed for the user’s session? For example, if the user is an English speaker from the US, you’ll only include the data relevant to him.
+
+
+There are a few ways to design this solution but in all of them we make the parent tightly coupled to the BarTracker, where the parent is always required to take some action. For example, (1) your parent component can be in charge of getting the metadata and propagating it to the child component (2) or the parent component could import an i18n library with data only relevant to the current locale.
+
+
+But then, in this case your component isn’t a truly stand-alone component. In all of the approaches we just went over, your component depends on its parent to take some action. All of these approaches diminish the main benefits of React, which is the separation of concerns as opposed to separations of technologies. Currently, i18n is an additional technology that is not integrated into each component. You have to fix this.
+
+
+Since we’re using React, we can use a feature called ContextProvider. Essentially, this object can share properties without explicitly passing them. In essence, the object is globally available, but it does require that the parent sets the context so that the children can inherit these values. This is better, but unfortunately still means that we don’t have a truly stand-alone component as the child depends on the parent.
+
+
+The way we solved this problem in PayPal is by using globalize-webpack-plugin, which is a tool that (among other things we’ll talk about in this session) allows us to load the relevant pieces of i18n metadata without us needing to write any additional code. It’s important to emphasize that if we were looking for just a localization solution then we’d also consider looking at React-INTL and FBT, which seems to us great libraries.
+
+
+You tell your manager about your success and he seems happy. “How big is your component if someone is using all of the features?” he asks. “It’s 100KB,” you respond. His expression changes.
+
+
+He tells you that it’s still way too big and that our onboarding team wants to use this component because of how AWESOME it is, but they can’t because of the size. 
+
+
+In fact, they’re reducing the size of their web app from 300KB to 60KB and if they were to use this component fully loaded, it would be bigger than their entire web app. “How dare you present this solution?” he continues, “don’t you know that there are people in small towns in India and Brazil that want to use this, but have incredibly slow internet connections?” 
+
+
+You think and think and think and realize that the developer using this component only actually needs the code and metadata related to the i18n formatting that he or she is doing. In other words, if the developer is just formatting a number, he doesn’t need code and data for currency for example and going even further, if he is formatting a date in a particular style, you probably don’t need most of the date data.
+
+
+So then how do you figure out what someone is using? Well you can use a static analyzer to read the AST of a developer’s code and figure out the parts of the i18n library and metadata that he needs. For example, you can figure out which types of formatters are being created, the styling options that those formatters have, as well as what function calls those formatters are making. Let’s look at how we accomplished this at PayPal and some issues we ran into.
+
+
+First we used a tool, AST Explorer, to visualize the AST so we could find where the relevant parts would be. In our case, we want to find out when people create a new formatter object or make a function call and we can see it clearly here.
+
+
+Now that we know what we are looking for in the AST, we can use Acorn to help us traverse it and use its built in functions that give us access all of the relevant parts of the AST such as call, new, and import expressions.
+
+
+We did run into a few challenging cases in static analyzer. The biggest one we faced was to figure which calls are related to our formatters because we need to keep track of the variables in their scopes and know what object type they belong to, considering things such as import aliases for example.
+
+
+The output of the static analyzer is an array of formatter objects that are used in the application code. Now that we have this information, we can feed these into a “compiler” that generates the bare minimum metadata and code needed for this solution to work perfectly.
+
+
+Now when we say compiler, this isn’t your typical programming language compiler. Instead, this is a globalize compiler that can help us make smaller code rather than byte code. How does the compiler do this? Basically, by doing two things (1) By renaming imports, so it’s easier for webpack to do treeshaking. For example if you use Number and Date then it will not include code related to currency for example. (2) It creates a formatter for you at build time so that at run time you don’t have to spend time creating one. This means that at runtime, you don’t need most of the regular library code, which means that our code is going to be smaller and faster.
+
+
+And how does the compiler make the metadata smaller? Given a formatter, it needs to know which data feature to load. Given a formatter styling options, it needs to know which subset of that data to load. If we implemented that logic in the compiler, it would be very similar to the code that generates the formatter. The approach used by Globalize is interesting. It simply reuses the formatter. Remember that the compiler is creating the formatters at build time. The formatters use an API to access the CLDR data, so the compiler can add a listener to the cldr “GET” call. Therefore, it can figure out the exact data that was requested by formatters at build time when it creates it. That is going to represent the bare minimum of metadata needed for these formatters to work correctly.
+
+
+Using both information, the compiler can generate a mix of minimal code and data that you feed onto globalize runtime version (a smaller library version).
+
+
+That’s what we’re starting to use in PayPal, although globalize-webpack-plugin isn’t new, it’s already used by other big companies such as Twitter. In our case, we need additional features such as address, name, and phone so we had to add some logic on top of it.
+
+
+One of our team’s major goals over the next couple of years is to give back to the open source community that has given a lot to us.
+
+
+In addition to that, we acknowledge it’s extremely important to consolidate efforts that helps the web standards to move forward, therefore our vision for the future is to enable a similar polyfill approach but this time for the native Ecma-402 API so we can move our vast production code base to web standards.
+
+
+We hope that walking through this story was helpful for you and gives you a better understanding of how the world can move towards the ideal we mentioned at the beginning of this talk. 
+
+
+We’d also love to chat with any of you about differing solutions or ideas that you might have related to the subjects we covered today.
+
+
+Please, let us know If you have any questions.
+
+
+Thanks!
